@@ -3,11 +3,14 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
+type Status = "pending" | "verified" | "rejected";
+
 type Submission = {
   id: number;
   created_at: string;
   parent_name: string;
   phone: string;
+  email: string | null;
   student_name: string;
   school: string;
   destination: string;
@@ -18,7 +21,12 @@ type Submission = {
   transfer_note: string | null;
   notes: string | null;
   proof_file: string;
-  status: "pending" | "verified" | "rejected";
+  status: Status;
+};
+
+type Confirming = {
+  item: Submission;
+  status: "verified" | "rejected";
 };
 
 const money = (n: number) =>
@@ -47,6 +55,7 @@ export default function AdminDashboard() {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("all");
   const [selected, setSelected] = useState<Submission | null>(null);
+  const [confirming, setConfirming] = useState<Confirming | null>(null);
   const [changingId, setChangingId] = useState<number | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -79,6 +88,29 @@ export default function AdminDashboard() {
     };
   }, [router, reloadKey]);
 
+  // Tombol Esc menutup dialog teratas.
+  useEffect(() => {
+    if (!selected && !confirming) return;
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      if (changingId !== null) return;
+
+      if (confirming) {
+        setConfirming(null);
+        return;
+      }
+
+      setSelected(null);
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [selected, confirming, changingId]);
+
   function refresh() {
     setLoading(true);
     setError("");
@@ -89,7 +121,7 @@ export default function AdminDashboard() {
     () =>
       items.filter((item) => {
         const haystack =
-          `${item.parent_name} ${item.student_name} ${item.school} ${item.phone} ${item.destination}`.toLowerCase();
+          `${item.parent_name} ${item.student_name} ${item.school} ${item.phone} ${item.email ?? ""} ${item.destination}`.toLowerCase();
         return (
           (filter === "all" || item.status === filter) &&
           haystack.includes(query.toLowerCase())
@@ -102,7 +134,7 @@ export default function AdminDashboard() {
   const pending = items.filter((item) => item.status === "pending").length;
   const verified = items.filter((item) => item.status === "verified").length;
 
-  async function updateStatus(item: Submission, status: Submission["status"]) {
+  async function updateStatus(item: Submission, status: Status) {
     setChangingId(item.id);
     try {
       const res = await fetch(`/api/admin/submissions/${item.id}`, {
@@ -115,7 +147,9 @@ export default function AdminDashboard() {
       setItems((old) =>
         old.map((x) => (x.id === item.id ? { ...x, status } : x)),
       );
+      setConfirming(null);
       setSelected(null);
+      if (json.emailError) alert(json.emailError);
     } catch (err) {
       alert(err instanceof Error ? err.message : "Gagal memperbarui status.");
     } finally {
@@ -128,6 +162,8 @@ export default function AdminDashboard() {
     router.push("/admin/login");
     router.refresh();
   }
+
+  const confirmBusy = confirming !== null && changingId === confirming.item.id;
 
   return (
     <main className="admin-shell">
@@ -162,7 +198,7 @@ export default function AdminDashboard() {
         </div>
         <div className="head-actions">
           <a className="button button-primary" href="/api/admin/export">
-            Unduh CSV <span>↓</span>
+            Unduh Excel <span>↓</span>
           </a>
           <button className="button button-outline" onClick={refresh}>
             ↻ Muat ulang
@@ -345,6 +381,12 @@ export default function AdminDashboard() {
                 <strong>{selected.phone}</strong>
               </div>
               <div>
+                <small>Email</small>
+                <strong style={{ overflowWrap: "anywhere" }}>
+                  {selected.email || "—"}
+                </strong>
+              </div>
+              <div>
                 <small>Asal sekolah</small>
                 <strong>{selected.school}</strong>
               </div>
@@ -392,19 +434,107 @@ export default function AdminDashboard() {
             <div className="modal-actions">
               <button
                 className="button button-outline"
-                disabled={changingId === selected.id}
-                onClick={() => void updateStatus(selected, "rejected")}
+                disabled={selected.status === "rejected"}
+                onClick={() =>
+                  setConfirming({ item: selected, status: "rejected" })
+                }
               >
-                Tolak
+                {selected.status === "rejected" ? "Sudah ditolak" : "Tolak"}
               </button>
               <button
                 className="button button-primary"
-                disabled={changingId === selected.id}
-                onClick={() => void updateStatus(selected, "verified")}
+                disabled={selected.status === "verified"}
+                onClick={() =>
+                  setConfirming({ item: selected, status: "verified" })
+                }
               >
-                {changingId === selected.id
-                  ? "Menyimpan..."
+                {selected.status === "verified"
+                  ? "✓ Sudah terverifikasi"
                   : "✓ Verifikasi pembayaran"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {confirming && (
+        <div
+          className="modal-backdrop"
+          style={{ zIndex: 1000 }}
+          onClick={() => {
+            if (!confirmBusy) setConfirming(null);
+          }}
+        >
+          <section
+            className="detail-modal"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="confirm-title"
+            style={{ width: "min(440px, 92vw)", maxWidth: 440 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-head">
+              <div>
+                <span className="eyebrow">
+                  KONFIRMASI · FARBIG-
+                  {String(confirming.item.id).padStart(6, "0")}
+                </span>
+                <h2 id="confirm-title">
+                  {confirming.status === "verified"
+                    ? "Verifikasi pembayaran ini?"
+                    : "Tolak pembayaran ini?"}
+                </h2>
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gap: 10, margin: "8px 0 20px" }}>
+              <p style={{ margin: 0 }}>
+                <strong>{confirming.item.student_name}</strong> ·{" "}
+                {confirming.item.destination}
+                <br />
+                {money(confirming.item.amount_paid)} ·{" "}
+                {confirming.item.payment_method}
+              </p>
+
+              {confirming.status === "verified" ? (
+                <p style={{ margin: 0 }}>
+                  {confirming.item.email
+                    ? `Email berisi bukti pembayaran akan langsung dikirim ke ${confirming.item.email}.`
+                    : "Peserta ini tidak memiliki alamat email, sehingga email tidak akan dikirim."}
+                </p>
+              ) : (
+                <p style={{ margin: 0 }}>
+                  Pembayaran akan ditandai sebagai ditolak. Pastikan bukti
+                  pembayaran sudah diperiksa.
+                </p>
+              )}
+            </div>
+
+            <div className="modal-actions">
+              <button
+                className="button button-outline"
+                disabled={confirmBusy}
+                onClick={() => setConfirming(null)}
+              >
+                Batal
+              </button>
+              <button
+                className="button button-primary"
+                disabled={confirmBusy}
+                style={
+                  confirming.status === "rejected"
+                    ? { background: "#9b2c2c", borderColor: "#9b2c2c" }
+                    : undefined
+                }
+                onClick={() =>
+                  void updateStatus(confirming.item, confirming.status)
+                }
+              >
+                {confirmBusy
+                  ? "Menyimpan..."
+                  : confirming.status === "verified"
+                    ? "Ya, verifikasi"
+                    : "Ya, tolak"}
               </button>
             </div>
           </section>

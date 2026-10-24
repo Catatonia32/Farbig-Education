@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
+import ExcelJS from "exceljs";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 type Row = Record<string, unknown>;
 
@@ -12,66 +14,34 @@ const STATUS_LABEL: Record<string, string> = {
   rejected: "Ditolak",
 };
 
-function formatDateTime(value: unknown) {
-  const d = new Date(String(value));
+const STATUS_STYLE: Record<string, { bg: string; fg: string }> = {
+  pending: { bg: "FFFFF3D6", fg: "FF8A5A00" },
+  verified: { bg: "FFDCEFE3", fg: "FF1B5E3B" },
+  rejected: { bg: "FFFBE0E0", fg: "FF9B2C2C" },
+};
+
+const BRAND = "FF1A4D3E";
+const BORDER = { style: "thin" as const, color: { argb: "FFD9E2DE" } };
+const WIB_OFFSET_MS = 7 * 60 * 60 * 1000;
+
+// Tanggal + jam sebagai tanggal asli Excel, digeser ke WIB.
+function toWibDateTime(value: unknown): Date | string {
+  const d = new Date(String(value ?? ""));
   if (Number.isNaN(d.getTime())) return String(value ?? "");
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Jakarta",
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  })
-    .format(d)
-    .replace(", ", " ");
+  return new Date(d.getTime() + WIB_OFFSET_MS);
 }
 
-function formatDate(value: unknown) {
-  const [y, m, d] = String(value ?? "").split("-");
-  return y && m && d ? `${d}/${m}/${y}` : String(value ?? "");
+// "YYYY-MM-DD" sebagai tanggal asli Excel.
+function toDateOnly(value: unknown): Date | string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value ?? ""));
+  if (!match) return String(value ?? "");
+  return new Date(
+    Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])),
+  );
 }
 
-// Teks biasa: dikutip, dan dicegah dibaca Excel sebagai rumus
-function text(value: unknown) {
-  let s = value === null || value === undefined ? "" : String(value);
-  if (/^[=+\-@]/.test(s)) s = `'${s}`;
-  return `"${s.replace(/"/g, '""')}"`;
-}
-
-// Angka panjang (nomor HP) dipaksa tampil utuh, bukan 1,23E+11
-function textAsIs(value: unknown) {
-  const s = String(value ?? "").replace(/"/g, "");
-  return `="${s}"`;
-}
-
-const columns: { header: string; cell: (r: Row) => string }[] = [
-  {
-    header: "No. Referensi",
-    cell: (r) => text(`FARBIG-${String(r.id).padStart(6, "0")}`),
-  },
-  { header: "Tanggal Masuk", cell: (r) => text(formatDateTime(r.created_at)) },
-  { header: "Nama Peserta", cell: (r) => text(r.student_name) },
-  { header: "Asal Sekolah", cell: (r) => text(r.school) },
-  { header: "Orang Tua / Wali", cell: (r) => text(r.parent_name) },
-  { header: "Nomor WhatsApp", cell: (r) => textAsIs(r.phone) },
-  { header: "Program", cell: (r) => text(r.destination) },
-  { header: "Jenis Pembayaran", cell: (r) => text(r.payment_type) },
-  {
-    header: "Tanggal Pembayaran",
-    cell: (r) => text(formatDate(r.payment_date)),
-  },
-  { header: "Nominal (Rp)", cell: (r) => String(Number(r.amount_paid) || 0) },
-  { header: "Metode Pembayaran", cell: (r) => text(r.payment_method) },
-  { header: "Nama Pengirim / Berita", cell: (r) => text(r.transfer_note) },
-  { header: "Catatan", cell: (r) => text(r.notes) },
-  {
-    header: "Status",
-    cell: (r) => text(STATUS_LABEL[String(r.status)] ?? r.status),
-  },
-  { header: "File Bukti", cell: (r) => text(r.proof_file) },
-];
+const str = (value: unknown) =>
+  value === null || value === undefined ? "" : String(value);
 
 export async function GET() {
   const admin = await requireAdmin();
@@ -83,20 +53,157 @@ export async function GET() {
     .order("created_at", { ascending: false });
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    console.error("[export] Supabase:", error.message);
+    return NextResponse.json(
+      { error: "Gagal mengambil data untuk diekspor." },
+      { status: 500 },
+    );
   }
 
   const rows = (data ?? []) as Row[];
-  const lines = [
-    "sep=;",
-    columns.map((c) => text(c.header)).join(";"),
-    ...rows.map((row) => columns.map((c) => c.cell(row)).join(";")),
+
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Farbig International Education";
+  workbook.created = new Date();
+
+  const sheet = workbook.addWorksheet("Respons Pembayaran", {
+    views: [{ state: "frozen", ySplit: 1 }],
+  });
+
+  sheet.columns = [
+    { header: "No. Referensi", key: "ref", width: 17 },
+    { header: "Tanggal Masuk", key: "created", width: 18 },
+    { header: "Nama Peserta", key: "student", width: 28 },
+    { header: "Asal Sekolah", key: "school", width: 32 },
+    { header: "Orang Tua / Wali", key: "parent", width: 26 },
+    { header: "Nomor WhatsApp", key: "phone", width: 18 },
+    { header: "Email", key: "email", width: 32 },
+    { header: "Program", key: "program", width: 28 },
+    { header: "Jenis Pembayaran", key: "type", width: 20 },
+    { header: "Tanggal Pembayaran", key: "paydate", width: 18 },
+    { header: "Nominal", key: "amount", width: 18 },
+    { header: "Metode Pembayaran", key: "method", width: 20 },
+    { header: "Nama Pengirim / Berita", key: "note", width: 28 },
+    { header: "Catatan", key: "notes", width: 36 },
+    { header: "Status", key: "status", width: 16 },
+    { header: "File Bukti", key: "proof", width: 42 },
   ];
 
-  return new NextResponse("\uFEFF" + lines.join("\r\n"), {
+  for (const r of rows) {
+    sheet.addRow({
+      ref: `FARBIG-${String(r.id).padStart(6, "0")}`,
+      created: toWibDateTime(r.created_at),
+      student: str(r.student_name),
+      school: str(r.school),
+      parent: str(r.parent_name),
+      phone: str(r.phone),
+      email: str(r.email),
+      program: str(r.destination),
+      type: str(r.payment_type),
+      paydate: toDateOnly(r.payment_date),
+      amount: Number(r.amount_paid) || 0,
+      method: str(r.payment_method),
+      note: str(r.transfer_note),
+      notes: str(r.notes),
+      status: STATUS_LABEL[str(r.status)] ?? str(r.status),
+      proof: str(r.proof_file),
+    });
+  }
+
+  // Format kolom
+  sheet.getColumn("created").numFmt = "dd/mm/yyyy hh:mm";
+  sheet.getColumn("paydate").numFmt = "dd/mm/yyyy";
+  sheet.getColumn("amount").numFmt = '"Rp" #,##0';
+  sheet.getColumn("phone").numFmt = "@"; // nomor tetap utuh, bukan 1,23E+11
+
+  // Header
+  const header = sheet.getRow(1);
+  header.height = 28;
+  header.eachCell((cell) => {
+    cell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: BRAND } };
+    cell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+    cell.border = { top: BORDER, left: BORDER, bottom: BORDER, right: BORDER };
+  });
+
+  // Isi data
+  const statusColIndex = sheet.getColumn("status").number;
+  const amountColIndex = sheet.getColumn("amount").number;
+
+  for (let i = 2; i <= rows.length + 1; i++) {
+    const row = sheet.getRow(i);
+    row.eachCell({ includeEmpty: true }, (cell) => {
+      cell.alignment = { vertical: "top", wrapText: true };
+      cell.border = {
+        top: BORDER,
+        left: BORDER,
+        bottom: BORDER,
+        right: BORDER,
+      };
+    });
+
+    row.getCell(amountColIndex).alignment = {
+      vertical: "top",
+      horizontal: "right",
+    };
+
+    const raw = str(rows[i - 2].status);
+    const style = STATUS_STYLE[raw];
+    if (style) {
+      const cell = row.getCell(statusColIndex);
+      cell.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: style.bg },
+      };
+      cell.font = { bold: true, color: { argb: style.fg } };
+      cell.alignment = { vertical: "top", horizontal: "center" };
+    }
+  }
+
+  // Baris total (ikut berubah saat data difilter di Excel)
+  if (rows.length > 0) {
+    const totalRowIndex = rows.length + 2;
+    const amountLetter = sheet.getColumn("amount").letter;
+    const totalRow = sheet.getRow(totalRowIndex);
+
+    totalRow.getCell(sheet.getColumn("method").number).value = "TOTAL";
+    totalRow.getCell(amountColIndex).value = {
+      formula: `SUBTOTAL(109,${amountLetter}2:${amountLetter}${rows.length + 1})`,
+    };
+
+    totalRow.eachCell({ includeEmpty: true }, (cell, col) => {
+      if (col > sheet.columnCount) return;
+      cell.font = { bold: true };
+      cell.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FFF1F5F3" },
+      };
+      cell.border = { top: { style: "medium", color: { argb: BRAND } } };
+    });
+    totalRow.getCell(sheet.getColumn("method").number).alignment = {
+      horizontal: "right",
+    };
+    totalRow.getCell(amountColIndex).numFmt = '"Rp" #,##0';
+    totalRow.getCell(amountColIndex).alignment = { horizontal: "right" };
+  }
+
+  // Filter di header
+  sheet.autoFilter = {
+    from: { row: 1, column: 1 },
+    to: { row: Math.max(rows.length + 1, 1), column: sheet.columnCount },
+  };
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  const stamp = new Date(Date.now() + WIB_OFFSET_MS).toISOString().slice(0, 10);
+
+  return new NextResponse(new Uint8Array(buffer as ArrayBuffer), {
     headers: {
-      "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": 'attachment; filename="respons-pembayaran.csv"',
+      "Content-Type":
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "Content-Disposition": `attachment; filename="respons-pembayaran-${stamp}.xlsx"`,
+      "Cache-Control": "no-store",
     },
   });
 }

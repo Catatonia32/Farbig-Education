@@ -73,8 +73,7 @@ export default function HomePage() {
           <span className="section-index">01 / PETUNJUK</span>
           <h2>
             Sebelum
-            <br />
-            mengirimkan.
+            <br /> mengirimkan.
           </h2>
           <p>
             Pastikan data peserta sesuai dengan dokumen dan simpan bukti

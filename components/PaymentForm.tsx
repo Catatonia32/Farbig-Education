@@ -5,9 +5,9 @@ import type { ChangeEvent, FormEvent } from "react";
 
 const programs = [
   "Singapore–Malaysia 6 Hari",
-  "Singapore–Malaysia 7 Hari",
   "Japan Mono Tokyo 8 Hari",
   "China Beijing 7 Hari",
+  "Mesir–Israel 14 Hari",
   "Program lainnya",
 ];
 
@@ -215,6 +215,20 @@ export default function PaymentForm() {
             required
             maxLength={30}
             placeholder="Contoh: 081234567890"
+          />
+        </label>
+
+        <label className="field">
+          <span>
+            Email <b>*</b>
+          </span>
+          <input
+            name="email"
+            type="email"
+            autoComplete="email"
+            required
+            maxLength={160}
+            placeholder="Untuk menerima bukti verifikasi"
           />
         </label>
 

@@ -17,9 +17,9 @@ const MIME_EXT: Record<string, string> = {
 
 const allowedPrograms = new Set([
   "Singapore–Malaysia 6 Hari",
-  "Singapore–Malaysia 7 Hari",
   "Japan Mono Tokyo 8 Hari",
   "China Beijing 7 Hari",
+  "Mesir–Israel 14 Hari",
   "Program lainnya",
 ]);
 
@@ -130,6 +130,7 @@ export async function POST(request: Request) {
 
     const parentName = clean(form.get("parentName"));
     const phone = clean(form.get("phone"));
+    const email = clean(form.get("email")).toLowerCase();
     const studentName = clean(form.get("studentName"));
     const school = clean(form.get("school"));
     const destination = clean(form.get("destination"));
@@ -147,6 +148,7 @@ export async function POST(request: Request) {
       ![
         parentName,
         phone,
+        email,
         studentName,
         school,
         destination,
@@ -164,6 +166,7 @@ export async function POST(request: Request) {
       studentName.length > 120 ||
       school.length > 160 ||
       phone.length > 30 ||
+      email.length > 160 ||
       transferNote.length > 200 ||
       notes.length > 1000
     ) {
@@ -174,6 +177,10 @@ export async function POST(request: Request) {
       return jsonError(
         "Nomor WhatsApp tidak valid. Periksa kembali nomor yang dimasukkan.",
       );
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) {
+      return jsonError("Alamat email tidak valid.");
     }
 
     if (!allowedPrograms.has(destination)) {
@@ -255,6 +262,7 @@ export async function POST(request: Request) {
       .insert({
         parent_name: parentName,
         phone,
+        email,
         student_name: studentName,
         school,
         destination,
