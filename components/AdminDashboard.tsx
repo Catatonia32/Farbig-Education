@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import Swal from "sweetalert2";
 
 type Status = "pending" | "verified" | "rejected";
 
@@ -24,10 +25,27 @@ type Submission = {
   status: Status;
 };
 
-type Confirming = {
-  item: Submission;
-  status: "verified" | "rejected";
+type PatchResult = {
+  emailSent?: boolean;
+  emailError?: string | null;
 };
+
+const swal = Swal.mixin({
+  heightAuto: false,
+  // Pastikan SweetAlert selalu tampil di atas modal detail.
+  didOpen: (popup) => {
+    const container = popup.parentElement;
+    if (container) container.style.zIndex = "9999";
+  },
+});
+
+const escapeHtml = (value: string) =>
+  value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 
 const money = (n: number) =>
   new Intl.NumberFormat("id-ID", {
@@ -47,6 +65,25 @@ const date = (s: string) => {
   });
 };
 
+async function patchStatus(
+  item: Submission,
+  status: Status,
+): Promise<PatchResult> {
+  const res = await fetch(`/api/admin/submissions/${item.id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status }),
+  });
+
+  const json = await res.json().catch(() => ({}));
+
+  if (!res.ok) {
+    throw new Error(json.error || "Status gagal diperbarui.");
+  }
+
+  return json as PatchResult;
+}
+
 export default function AdminDashboard() {
   const router = useRouter();
   const [items, setItems] = useState<Submission[]>([]);
@@ -55,8 +92,6 @@ export default function AdminDashboard() {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("all");
   const [selected, setSelected] = useState<Submission | null>(null);
-  const [confirming, setConfirming] = useState<Confirming | null>(null);
-  const [changingId, setChangingId] = useState<number | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
@@ -88,19 +123,13 @@ export default function AdminDashboard() {
     };
   }, [router, reloadKey]);
 
-  // Tombol Esc menutup dialog teratas.
+  // Tombol Esc menutup modal detail (dilewati saat SweetAlert terbuka).
   useEffect(() => {
-    if (!selected && !confirming) return;
+    if (!selected) return;
 
     function onKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
-      if (changingId !== null) return;
-
-      if (confirming) {
-        setConfirming(null);
-        return;
-      }
-
+      if (Swal.isVisible()) return;
       setSelected(null);
     }
 
@@ -109,7 +138,7 @@ export default function AdminDashboard() {
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [selected, confirming, changingId]);
+  }, [selected]);
 
   function refresh() {
     setLoading(true);
@@ -134,27 +163,80 @@ export default function AdminDashboard() {
   const pending = items.filter((item) => item.status === "pending").length;
   const verified = items.filter((item) => item.status === "verified").length;
 
-  async function updateStatus(item: Submission, status: Status) {
-    setChangingId(item.id);
-    try {
-      const res = await fetch(`/api/admin/submissions/${item.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
+  async function confirmStatusChange(
+    item: Submission,
+    status: "verified" | "rejected",
+  ) {
+    const isVerify = status === "verified";
+
+    const emailInfo = isVerify
+      ? item.email
+        ? `Email berisi bukti pembayaran akan langsung dikirim ke <b>${escapeHtml(item.email)}</b>.`
+        : "Peserta ini tidak memiliki alamat email, sehingga email tidak akan dikirim."
+      : "Pembayaran akan ditandai sebagai ditolak. Pastikan bukti pembayaran sudah diperiksa.";
+
+    const result = await swal.fire({
+      icon: isVerify ? "question" : "warning",
+      title: isVerify ? "Verifikasi pembayaran ini?" : "Tolak pembayaran ini?",
+      html: `
+        <div style="text-align:left;line-height:1.6">
+          <div><b>${escapeHtml(item.student_name)}</b> · ${escapeHtml(item.destination)}</div>
+          <div>${escapeHtml(money(item.amount_paid))} · ${escapeHtml(item.payment_method)}</div>
+          <div style="margin-top:10px">${emailInfo}</div>
+        </div>
+      `,
+      showCancelButton: true,
+      confirmButtonText: isVerify ? "Ya, verifikasi" : "Ya, tolak",
+      cancelButtonText: "Batal",
+      confirmButtonColor: isVerify ? "#1a4d3e" : "#9b2c2c",
+      reverseButtons: true,
+      focusCancel: !isVerify,
+      showLoaderOnConfirm: true,
+      allowOutsideClick: () => !Swal.isLoading(),
+      allowEscapeKey: () => !Swal.isLoading(),
+      preConfirm: async () => {
+        try {
+          return await patchStatus(item, status);
+        } catch (err) {
+          Swal.showValidationMessage(
+            err instanceof Error ? err.message : "Gagal memperbarui status.",
+          );
+          return false;
+        }
+      },
+    });
+
+    if (!result.isConfirmed || !result.value) return;
+
+    const json = result.value as PatchResult;
+
+    setItems((old) =>
+      old.map((x) => (x.id === item.id ? { ...x, status } : x)),
+    );
+    setSelected(null);
+
+    if (json.emailError) {
+      await swal.fire({
+        icon: "warning",
+        title: "Status tersimpan",
+        text: json.emailError,
+        confirmButtonText: "Mengerti",
+        confirmButtonColor: "#1a4d3e",
       });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Status gagal diperbarui.");
-      setItems((old) =>
-        old.map((x) => (x.id === item.id ? { ...x, status } : x)),
-      );
-      setConfirming(null);
-      setSelected(null);
-      if (json.emailError) alert(json.emailError);
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Gagal memperbarui status.");
-    } finally {
-      setChangingId(null);
+      return;
     }
+
+    await swal.fire({
+      icon: "success",
+      title: isVerify ? "Pembayaran terverifikasi" : "Pembayaran ditolak",
+      text:
+        isVerify && json.emailSent
+          ? "Email bukti pembayaran telah dikirim ke peserta."
+          : undefined,
+      timer: 2200,
+      timerProgressBar: true,
+      showConfirmButton: false,
+    });
   }
 
   async function logout() {
@@ -162,8 +244,6 @@ export default function AdminDashboard() {
     router.push("/admin/login");
     router.refresh();
   }
-
-  const confirmBusy = confirming !== null && changingId === confirming.item.id;
 
   return (
     <main className="admin-shell">
@@ -435,106 +515,18 @@ export default function AdminDashboard() {
               <button
                 className="button button-outline"
                 disabled={selected.status === "rejected"}
-                onClick={() =>
-                  setConfirming({ item: selected, status: "rejected" })
-                }
+                onClick={() => void confirmStatusChange(selected, "rejected")}
               >
                 {selected.status === "rejected" ? "Sudah ditolak" : "Tolak"}
               </button>
               <button
                 className="button button-primary"
                 disabled={selected.status === "verified"}
-                onClick={() =>
-                  setConfirming({ item: selected, status: "verified" })
-                }
+                onClick={() => void confirmStatusChange(selected, "verified")}
               >
                 {selected.status === "verified"
                   ? "✓ Sudah terverifikasi"
                   : "✓ Verifikasi pembayaran"}
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
-
-      {confirming && (
-        <div
-          className="modal-backdrop"
-          style={{ zIndex: 1000 }}
-          onClick={() => {
-            if (!confirmBusy) setConfirming(null);
-          }}
-        >
-          <section
-            className="detail-modal"
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby="confirm-title"
-            style={{ width: "min(440px, 92vw)", maxWidth: 440 }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="modal-head">
-              <div>
-                <span className="eyebrow">
-                  KONFIRMASI · FARBIG-
-                  {String(confirming.item.id).padStart(6, "0")}
-                </span>
-                <h2 id="confirm-title">
-                  {confirming.status === "verified"
-                    ? "Verifikasi pembayaran ini?"
-                    : "Tolak pembayaran ini?"}
-                </h2>
-              </div>
-            </div>
-
-            <div style={{ display: "grid", gap: 10, margin: "8px 0 20px" }}>
-              <p style={{ margin: 0 }}>
-                <strong>{confirming.item.student_name}</strong> ·{" "}
-                {confirming.item.destination}
-                <br />
-                {money(confirming.item.amount_paid)} ·{" "}
-                {confirming.item.payment_method}
-              </p>
-
-              {confirming.status === "verified" ? (
-                <p style={{ margin: 0 }}>
-                  {confirming.item.email
-                    ? `Email berisi bukti pembayaran akan langsung dikirim ke ${confirming.item.email}.`
-                    : "Peserta ini tidak memiliki alamat email, sehingga email tidak akan dikirim."}
-                </p>
-              ) : (
-                <p style={{ margin: 0 }}>
-                  Pembayaran akan ditandai sebagai ditolak. Pastikan bukti
-                  pembayaran sudah diperiksa.
-                </p>
-              )}
-            </div>
-
-            <div className="modal-actions">
-              <button
-                className="button button-outline"
-                disabled={confirmBusy}
-                onClick={() => setConfirming(null)}
-              >
-                Batal
-              </button>
-              <button
-                className="button button-primary"
-                disabled={confirmBusy}
-                style={
-                  confirming.status === "rejected"
-                    ? { background: "#9b2c2c", borderColor: "#9b2c2c" }
-                    : undefined
-                }
-                onClick={() =>
-                  void updateStatus(confirming.item, confirming.status)
-                }
-              >
-                {confirmBusy
-                  ? "Menyimpan..."
-                  : confirming.status === "verified"
-                    ? "Ya, verifikasi"
-                    : "Ya, tolak"}
               </button>
             </div>
           </section>
