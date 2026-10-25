@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
+import { BUCKET, PASSPORT_FOLDER, PROOF_FOLDER } from "@/lib/supabase/storage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024;
-const BUCKET = "payment-proofs";
 
 const MIME_EXT: Record<string, string> = {
   "image/jpeg": ".jpg",
@@ -77,18 +77,19 @@ function createSupabaseAdmin() {
   });
 }
 
+type SupabaseAdmin = ReturnType<typeof createSupabaseAdmin>;
+
+// Hanya memastikan format tanggal valid dan tanggalnya benar-benar ada.
 function validDate(value: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     return false;
   }
 
   const parsed = new Date(`${value}T00:00:00.000Z`);
-  const today = new Date().toISOString().slice(0, 10);
 
   return (
     Number.isFinite(parsed.getTime()) &&
-    parsed.toISOString().slice(0, 10) === value &&
-    value <= today
+    parsed.toISOString().slice(0, 10) === value
   );
 }
 
@@ -117,10 +118,82 @@ function validFileSignature(bytes: Buffer, ext: string) {
   return false;
 }
 
-export async function POST(request: Request) {
-  let supabaseAdmin: ReturnType<typeof createSupabaseAdmin> | null = null;
+type UploadCheck =
+  | { ok: true; bytes: Buffer; ext: string; type: string }
+  | { ok: false; error: string };
 
-  let uploadedPath: string | null = null;
+// Validasi satu file unggahan (ukuran, format, dan isi file).
+async function checkUpload(
+  file: FormDataEntryValue | null,
+  label: string,
+): Promise<UploadCheck> {
+  if (!(file instanceof File) || file.size === 0) {
+    return { ok: false, error: `${label} wajib diunggah.` };
+  }
+
+  if (file.size > MAX_FILE_SIZE) {
+    return { ok: false, error: `Ukuran ${label.toLowerCase()} maksimal 5 MB.` };
+  }
+
+  const ext = MIME_EXT[file.type];
+
+  if (!ext) {
+    return {
+      ok: false,
+      error: `Format ${label.toLowerCase()} harus JPG, PNG, WEBP, atau PDF.`,
+    };
+  }
+
+  const bytes = Buffer.from(await file.arrayBuffer());
+
+  if (!validFileSignature(bytes, ext)) {
+    return {
+      ok: false,
+      error: `Isi file ${label.toLowerCase()} tidak cocok dengan format yang dipilih.`,
+    };
+  }
+
+  return { ok: true, bytes, ext, type: file.type };
+}
+
+// Simpan file ke dalam folder di bucket.
+// `filename` disimpan di database, `path` (folder/filename) dipakai untuk Storage.
+async function storeFile(
+  supabase: SupabaseAdmin,
+  check: Extract<UploadCheck, { ok: true }>,
+  folder: string,
+) {
+  const filename = `${randomUUID()}${check.ext}`;
+  const path = `${folder}/${filename}`;
+
+  const { error } = await supabase.storage
+    .from(BUCKET)
+    .upload(path, check.bytes, {
+      contentType: check.type,
+      upsert: false,
+    });
+
+  return { filename, path, error };
+}
+
+async function removeUploaded(supabase: SupabaseAdmin, paths: string[]) {
+  if (paths.length === 0) return;
+
+  try {
+    const { error } = await supabase.storage.from(BUCKET).remove(paths);
+
+    if (error) {
+      console.error("[submissions] Gagal membersihkan file:", error.message);
+    }
+  } catch (cleanupError) {
+    console.error("[submissions] Cleanup exception:", cleanupError);
+  }
+}
+
+export async function POST(request: Request) {
+  let supabaseAdmin: SupabaseAdmin | null = null;
+
+  let uploadedPaths: string[] = [];
 
   try {
     const supabase = createSupabaseAdmin();
@@ -138,10 +211,8 @@ export async function POST(request: Request) {
     const paymentDate = clean(form.get("paymentDate"));
     const amountString = clean(form.get("amountPaid"));
     const paymentMethod = clean(form.get("paymentMethod"));
-    const transferNote = clean(form.get("transferNote"));
     const notes = clean(form.get("notes"));
     const consent = form.get("consent") === "on";
-    const file = form.get("proof");
 
     // Validasi kolom wajib.
     if (
@@ -167,7 +238,6 @@ export async function POST(request: Request) {
       school.length > 160 ||
       phone.length > 30 ||
       email.length > 160 ||
-      transferNote.length > 200 ||
       notes.length > 1000
     ) {
       return jsonError("Ada isian yang melebihi batas karakter.");
@@ -215,38 +285,27 @@ export async function POST(request: Request) {
       return jsonError("Persetujuan penggunaan data wajib dicentang.");
     }
 
-    if (!(file instanceof File) || file.size === 0) {
-      return jsonError("Bukti pembayaran wajib diunggah.");
+    // Validasi kedua file sebelum ada yang diunggah.
+    const proof = await checkUpload(form.get("proof"), "Bukti pembayaran");
+
+    if (!proof.ok) {
+      return jsonError(proof.error);
     }
 
-    if (file.size > MAX_FILE_SIZE) {
-      return jsonError("Ukuran bukti pembayaran maksimal 5 MB.");
+    const passport = await checkUpload(form.get("passport"), "Paspor peserta");
+
+    if (!passport.ok) {
+      return jsonError(passport.error);
     }
 
-    const ext = MIME_EXT[file.type];
+    // Upload bukti pembayaran ke folder Bukti_pembayaran.
+    const proofUpload = await storeFile(supabase, proof, PROOF_FOLDER);
 
-    if (!ext) {
-      return jsonError("Format bukti harus JPG, PNG, WEBP, atau PDF.");
-    }
-
-    const bytes = Buffer.from(await file.arrayBuffer());
-
-    if (!validFileSignature(bytes, ext)) {
-      return jsonError("Isi file tidak cocok dengan format yang dipilih.");
-    }
-
-    // Upload bukti ke Storage privat.
-    const filename = `${randomUUID()}${ext}`;
-
-    const { error: uploadError } = await supabase.storage
-      .from(BUCKET)
-      .upload(filename, bytes, {
-        contentType: file.type,
-        upsert: false,
-      });
-
-    if (uploadError) {
-      console.error("[submissions] Storage upload gagal:", uploadError.message);
+    if (proofUpload.error) {
+      console.error(
+        "[submissions] Storage upload bukti gagal:",
+        proofUpload.error.message,
+      );
 
       return jsonError(
         "Bukti pembayaran gagal disimpan. Periksa bucket payment-proofs dan secret key Supabase.",
@@ -254,9 +313,29 @@ export async function POST(request: Request) {
       );
     }
 
-    uploadedPath = filename;
+    uploadedPaths.push(proofUpload.path);
 
-    // Simpan data formulir ke PostgreSQL.
+    // Upload paspor ke folder Passport.
+    const passportUpload = await storeFile(supabase, passport, PASSPORT_FOLDER);
+
+    if (passportUpload.error) {
+      console.error(
+        "[submissions] Storage upload paspor gagal:",
+        passportUpload.error.message,
+      );
+
+      await removeUploaded(supabase, uploadedPaths);
+      uploadedPaths = [];
+
+      return jsonError(
+        "Paspor gagal disimpan. Periksa bucket payment-proofs dan secret key Supabase.",
+        500,
+      );
+    }
+
+    uploadedPaths.push(passportUpload.path);
+
+    // Simpan data formulir ke PostgreSQL (hanya nama file, tanpa folder).
     const { data: inserted, error: insertError } = await supabase
       .from("payment_submissions")
       .insert({
@@ -270,9 +349,9 @@ export async function POST(request: Request) {
         payment_date: paymentDate,
         amount_paid: amountPaid,
         payment_method: paymentMethod,
-        transfer_note: transferNote || null,
         notes: notes || null,
-        proof_file: filename,
+        proof_file: proofUpload.filename,
+        passport_file: passportUpload.filename,
       })
       .select("id")
       .single();
@@ -283,19 +362,9 @@ export async function POST(request: Request) {
         insertError.message,
       );
 
-      // Bersihkan bukti jika penyimpanan database gagal.
-      const { error: cleanupError } = await supabase.storage
-        .from(BUCKET)
-        .remove([filename]);
-
-      if (cleanupError) {
-        console.error(
-          "[submissions] Gagal membersihkan file:",
-          cleanupError.message,
-        );
-      }
-
-      uploadedPath = null;
+      // Bersihkan kedua file jika penyimpanan database gagal.
+      await removeUploaded(supabase, uploadedPaths);
+      uploadedPaths = [];
 
       return jsonError(
         "Data pembayaran gagal disimpan. Periksa tabel payment_submissions dan kolomnya.",
@@ -303,7 +372,7 @@ export async function POST(request: Request) {
       );
     }
 
-    uploadedPath = null;
+    uploadedPaths = [];
 
     return NextResponse.json(
       {
@@ -319,21 +388,8 @@ export async function POST(request: Request) {
     // Catat detail di terminal, bukan membocorkan rahasia ke browser.
     console.error("[submissions] Server error:", error);
 
-    if (uploadedPath && supabaseAdmin) {
-      try {
-        const { error: cleanupError } = await supabaseAdmin.storage
-          .from(BUCKET)
-          .remove([uploadedPath]);
-
-        if (cleanupError) {
-          console.error(
-            "[submissions] Gagal membersihkan file:",
-            cleanupError.message,
-          );
-        }
-      } catch (cleanupError) {
-        console.error("[submissions] Cleanup exception:", cleanupError);
-      }
+    if (supabaseAdmin) {
+      await removeUploaded(supabaseAdmin, uploadedPaths);
     }
 
     return jsonError(

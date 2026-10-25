@@ -2,15 +2,45 @@ import "server-only";
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
+import { supabaseAdmin } from "@/lib/supabase/admin";
 
 export const ADMIN_COOKIE = "farbig_admin_session";
 
+export const ROLES = ["viewer", "admin", "super_admin"] as const;
+export type Role = (typeof ROLES)[number];
+
+const ROLE_LEVEL: Record<Role, number> = {
+  viewer: 1,
+  admin: 2,
+  super_admin: 3,
+};
+
+export function isRole(value: unknown): value is Role {
+  return (
+    typeof value === "string" && (ROLES as readonly string[]).includes(value)
+  );
+}
+
+export function hasRole(role: Role, minimum: Role): boolean {
+  return ROLE_LEVEL[role] >= ROLE_LEVEL[minimum];
+}
+
 const EIGHT_HOURS = 8 * 60 * 60;
 const MIN_SECRET_LENGTH = 32;
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type SessionPayload = {
-  role: "admin";
+  uid: string;
+  sv: number;
   exp: number;
+};
+
+export type SessionUser = {
+  id: string;
+  email: string;
+  fullName: string;
+  role: Role;
 };
 
 function getSecret(): string | null {
@@ -39,9 +69,13 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(bufferA, bufferB);
 }
 
-export function createSession(): string {
+export function createSession(user: {
+  id: string;
+  session_version: number;
+}): string {
   const payload: SessionPayload = {
-    role: "admin",
+    uid: user.id,
+    sv: user.session_version,
     exp: Math.floor(Date.now() / 1000) + EIGHT_HOURS,
   };
 
@@ -52,13 +86,14 @@ export function createSession(): string {
   return `${encodedPayload}.${sign(encodedPayload)}`;
 }
 
-export function isValidSession(token?: string | null): boolean {
+// Memeriksa tanda tangan dan masa berlaku saja (tanpa database).
+export function readSession(token?: string | null): SessionPayload | null {
   if (!token || token.length > 4096 || !getSecret()) {
-    return false;
+    return null;
   }
 
   const parts = token.split(".");
-  if (parts.length !== 2) return false;
+  if (parts.length !== 2) return null;
 
   const [payload, signature] = parts;
 
@@ -68,62 +103,85 @@ export function isValidSession(token?: string | null): boolean {
     !/^[A-Za-z0-9_-]+$/.test(payload) ||
     !/^[A-Za-z0-9_-]+$/.test(signature)
   ) {
-    return false;
+    return null;
   }
 
   try {
     if (!safeEqual(sign(payload), signature)) {
-      return false;
+      return null;
     }
 
-    const decoded = Buffer.from(payload, "base64url").toString("utf8");
+    const data: unknown = JSON.parse(
+      Buffer.from(payload, "base64url").toString("utf8"),
+    );
 
-    const data: unknown = JSON.parse(decoded);
+    if (typeof data !== "object" || data === null) return null;
+
+    const session = data as { uid?: unknown; sv?: unknown; exp?: unknown };
 
     if (
-      typeof data !== "object" ||
-      data === null ||
-      !("role" in data) ||
-      !("exp" in data)
+      typeof session.uid !== "string" ||
+      !UUID_PATTERN.test(session.uid) ||
+      typeof session.sv !== "number" ||
+      !Number.isSafeInteger(session.sv) ||
+      typeof session.exp !== "number" ||
+      !Number.isSafeInteger(session.exp) ||
+      session.exp <= Math.floor(Date.now() / 1000)
     ) {
-      return false;
+      return null;
     }
 
-    const session = data as {
-      role?: unknown;
-      exp?: unknown;
-    };
-
-    return (
-      session.role === "admin" &&
-      typeof session.exp === "number" &&
-      Number.isSafeInteger(session.exp) &&
-      session.exp > Math.floor(Date.now() / 1000)
-    );
+    return { uid: session.uid, sv: session.sv, exp: session.exp };
   } catch {
-    return false;
+    return null;
   }
 }
 
-export async function isAdminRequest(): Promise<boolean> {
+// Kompatibilitas: hanya memeriksa tanda tangan, tidak memeriksa database.
+export function isValidSession(token?: string | null): boolean {
+  return readSession(token) !== null;
+}
+
+// Sumber kebenaran: setiap request memeriksa database, jadi user yang
+// dinonaktifkan atau diganti passwordnya langsung kehilangan akses.
+export async function getSessionUser(): Promise<SessionUser | null> {
   const cookieStore = await cookies();
-  const token = cookieStore.get(ADMIN_COOKIE)?.value;
+  const session = readSession(cookieStore.get(ADMIN_COOKIE)?.value);
 
-  return isValidSession(token);
-}
+  if (!session) return null;
 
-export function credentialsMatch(email: string, password: string): boolean {
-  const expectedEmail = process.env.ADMIN_EMAIL?.trim();
-  const expectedPassword = process.env.ADMIN_PASSWORD;
+  const { data, error } = await supabaseAdmin
+    .from("app_users")
+    .select("id, email, full_name, role, is_active, session_version")
+    .eq("id", session.uid)
+    .maybeSingle();
 
-  if (!expectedEmail || !expectedPassword || !email || !password) {
-    return false;
+  if (error) {
+    console.error("[auth] Gagal memeriksa sesi:", error.message);
+    return null;
   }
 
-  return (
-    safeEqual(email.trim().toLowerCase(), expectedEmail.toLowerCase()) &&
-    safeEqual(password, expectedPassword)
-  );
+  if (
+    !data ||
+    !data.is_active ||
+    data.session_version !== session.sv ||
+    !isRole(data.role)
+  ) {
+    return null;
+  }
+
+  return {
+    id: data.id,
+    email: data.email,
+    fullName: data.full_name,
+    role: data.role,
+  };
+}
+
+// Kompatibilitas: true bila user aktif dan levelnya admin ke atas.
+export async function isAdminRequest(): Promise<boolean> {
+  const user = await getSessionUser();
+  return user !== null && hasRole(user.role, "admin");
 }
 
 export const cookieOptions = {

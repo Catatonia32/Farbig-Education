@@ -1,10 +1,13 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Swal from "sweetalert2";
+import { getRealtimeClient } from "@/lib/supabase/browser";
 
 type Status = "pending" | "verified" | "rejected";
+
+type LiveStatus = "off" | "connecting" | "live" | "offline";
 
 type Submission = {
   id: number;
@@ -19,9 +22,9 @@ type Submission = {
   payment_date: string;
   amount_paid: number;
   payment_method: string;
-  transfer_note: string | null;
   notes: string | null;
   proof_file: string;
+  passport_file: string | null;
   status: Status;
 };
 
@@ -29,6 +32,16 @@ type PatchResult = {
   emailSent?: boolean;
   emailError?: string | null;
 };
+
+type FetchResult =
+  | { ok: true; items: Submission[] }
+  | { ok: false; unauthorized: boolean; error: string };
+
+// Nilai NEXT_PUBLIC_* ditanam saat build, jadi sama di server dan browser.
+const realtimeConfigured = Boolean(
+  process.env.NEXT_PUBLIC_SUPABASE_URL &&
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
+);
 
 const swal = Swal.mixin({
   heightAuto: false,
@@ -65,6 +78,34 @@ const date = (s: string) => {
   });
 };
 
+async function fetchSubmissions(): Promise<FetchResult> {
+  try {
+    const res = await fetch("/api/admin/submissions", { cache: "no-store" });
+
+    if (res.status === 401) {
+      return { ok: false, unauthorized: true, error: "" };
+    }
+
+    const json = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      return {
+        ok: false,
+        unauthorized: false,
+        error: json.error || "Data tidak dapat dimuat.",
+      };
+    }
+
+    return { ok: true, items: json.items as Submission[] };
+  } catch (err) {
+    return {
+      ok: false,
+      unauthorized: false,
+      error: err instanceof Error ? err.message : "Gagal mengambil data.",
+    };
+  }
+}
+
 async function patchStatus(
   item: Submission,
   status: Status,
@@ -93,35 +134,109 @@ export default function AdminDashboard() {
   const [filter, setFilter] = useState("all");
   const [selected, setSelected] = useState<Submission | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [liveStatus, setLiveStatus] = useState<LiveStatus>(
+    realtimeConfigured ? "connecting" : "off",
+  );
 
+  // Terapkan data terbaru, dan sinkronkan modal detail yang sedang terbuka.
+  const applyItems = useCallback((next: Submission[]) => {
+    setItems(next);
+    setError("");
+    setSelected((old) =>
+      old ? (next.find((item) => item.id === old.id) ?? null) : old,
+    );
+  }, []);
+
+  // Pemuatan awal dan tombol "Muat ulang".
   useEffect(() => {
     let cancelled = false;
 
-    fetch("/api/admin/submissions", { cache: "no-store" })
-      .then(async (res) => {
-        if (res.status === 401) {
-          router.push("/admin/login");
-          return;
-        }
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error || "Data tidak dapat dimuat.");
-        if (!cancelled) setItems(json.items);
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setError(
-            err instanceof Error ? err.message : "Gagal mengambil data.",
-          );
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    fetchSubmissions().then((result) => {
+      if (cancelled) return;
+
+      if (result.ok) {
+        applyItems(result.items);
+      } else if (result.unauthorized) {
+        router.push("/admin/login");
+      } else {
+        setError(result.error);
+      }
+
+      setLoading(false);
+    });
 
     return () => {
       cancelled = true;
     };
-  }, [router, reloadKey]);
+  }, [router, reloadKey, applyItems]);
+
+  // Realtime: dengarkan siaran perubahan dari database, lalu muat ulang diam-diam.
+  useEffect(() => {
+    const supabase = getRealtimeClient();
+
+    if (!supabase) return;
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const refresh = () => {
+      fetchSubmissions().then((result) => {
+        if (cancelled) return;
+
+        if (result.ok) {
+          applyItems(result.items);
+        } else if (result.unauthorized) {
+          router.push("/admin/login");
+        }
+      });
+    };
+
+    // Gabungkan beberapa siaran beruntun menjadi satu pemuatan.
+    const scheduleRefresh = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(refresh, 400);
+    };
+
+    const channel = supabase
+      .channel("admin-submissions")
+      .on("broadcast", { event: "submission_changed" }, scheduleRefresh)
+      .subscribe((status) => {
+        if (cancelled) return;
+
+        if (status === "SUBSCRIBED") {
+          setLiveStatus("live");
+          // Sinkronkan data yang mungkin terlewat saat terputus.
+          scheduleRefresh();
+        } else if (
+          status === "CHANNEL_ERROR" ||
+          status === "TIMED_OUT" ||
+          status === "CLOSED"
+        ) {
+          setLiveStatus("offline");
+        }
+      });
+
+    const onVisible = () => {
+      if (document.visibilityState === "visible") scheduleRefresh();
+    };
+
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("online", scheduleRefresh);
+
+    // Jaring pengaman: siaran tidak dijamin terkirim, jadi sinkronkan tiap 60 detik.
+    const poll = setInterval(() => {
+      if (document.visibilityState === "visible") refresh();
+    }, 60_000);
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      clearInterval(poll);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("online", scheduleRefresh);
+      supabase.removeChannel(channel);
+    };
+  }, [router, applyItems]);
 
   // Tombol Esc menutup modal detail (dilewati saat SweetAlert terbuka).
   useEffect(() => {
@@ -245,6 +360,13 @@ export default function AdminDashboard() {
     router.refresh();
   }
 
+  const liveLabel =
+    liveStatus === "live"
+      ? "LIVE"
+      : liveStatus === "connecting"
+        ? "MENYAMBUNG"
+        : "OFFLINE";
+
   return (
     <main className="admin-shell">
       <header className="admin-topbar">
@@ -256,8 +378,22 @@ export default function AdminDashboard() {
           </span>
         </Link>
         <div className="admin-actions">
-          <span className="admin-label">
-            <span className="live-dot" /> ADMIN PORTAL
+          <span
+            className="admin-label"
+            title={
+              liveStatus === "live"
+                ? "Data diperbarui otomatis"
+                : liveStatus === "off"
+                  ? "Realtime belum dikonfigurasi"
+                  : "Pembaruan otomatis sedang tidak tersambung"
+            }
+          >
+            <span
+              className="live-dot"
+              style={liveStatus === "live" ? undefined : { opacity: 0.35 }}
+            />{" "}
+            ADMIN PORTAL
+            {liveStatus !== "off" && <> · {liveLabel}</>}
           </span>
           <button
             className="button button-outline button-small"
@@ -490,10 +626,6 @@ export default function AdminDashboard() {
                 <small>Metode pembayaran</small>
                 <strong>{selected.payment_method}</strong>
               </div>
-              <div>
-                <small>Nama pengirim / berita</small>
-                <strong>{selected.transfer_note || "—"}</strong>
-              </div>
               <div className="detail-full">
                 <small>Catatan tambahan</small>
                 <p>{selected.notes || "Tidak ada catatan tambahan."}</p>
@@ -508,6 +640,21 @@ export default function AdminDashboard() {
                 >
                   Buka bukti pembayaran ↗
                 </a>
+              </div>
+              <div className="detail-full">
+                <small>Paspor peserta</small>
+                {selected.passport_file ? (
+                  <a
+                    className="proof-link"
+                    href={`/api/admin/uploads/${encodeURIComponent(selected.passport_file)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Buka paspor peserta ↗
+                  </a>
+                ) : (
+                  <p>Belum diunggah.</p>
+                )}
               </div>
             </div>
 

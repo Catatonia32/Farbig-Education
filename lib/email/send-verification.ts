@@ -1,8 +1,7 @@
 import "server-only";
 import { Resend } from "resend";
 import { supabaseAdmin } from "@/lib/supabase/admin";
-
-const BUCKET = "payment-proofs";
+import { downloadStoredFile, PROOF_FOLDER } from "@/lib/supabase/storage";
 
 type Submission = {
   id: number;
@@ -39,17 +38,19 @@ export async function sendVerificationEmail(s: Submission) {
     throw new Error("RESEND_API_KEY atau MAIL_FROM belum diatur.");
   }
 
-  const { data: file, error: downloadError } = await supabaseAdmin.storage
-    .from(BUCKET)
-    .download(s.proof_file);
+  // Cari bukti pembayaran di folder bukti, lalu di root (data lama).
+  const file = await downloadStoredFile(supabaseAdmin, s.proof_file, [
+    PROOF_FOLDER,
+    "",
+  ]);
 
-  if (downloadError || !file) {
+  if (!file) {
     throw new Error(
-      `Bukti pembayaran tidak dapat diambil: ${downloadError?.message ?? "file kosong"}`,
+      `Bukti pembayaran tidak ditemukan di Storage (${PROOF_FOLDER}/${s.proof_file}).`,
     );
   }
 
-  const buffer = Buffer.from(await file.arrayBuffer());
+  const buffer = Buffer.from(await file.blob.arrayBuffer());
   const ref = `FARBIG-${String(s.id).padStart(6, "0")}`;
   const ext = s.proof_file.includes(".")
     ? s.proof_file.slice(s.proof_file.lastIndexOf("."))

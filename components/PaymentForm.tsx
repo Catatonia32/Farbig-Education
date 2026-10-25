@@ -37,9 +37,14 @@ export default function PaymentForm() {
   const [successId, setSuccessId] = useState<number | null>(null);
   const [amount, setAmount] = useState("");
   const [proofFile, setProofFile] = useState<File | null>(null);
+  const [passportFile, setPassportFile] = useState<File | null>(null);
 
-  function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+  function handleProofChange(event: ChangeEvent<HTMLInputElement>) {
     setProofFile(event.target.files?.[0] ?? null);
+  }
+
+  function handlePassportChange(event: ChangeEvent<HTMLInputElement>) {
+    setPassportFile(event.target.files?.[0] ?? null);
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -126,6 +131,7 @@ export default function PaymentForm() {
       form.reset();
       setAmount("");
       setProofFile(null);
+      setPassportFile(null);
     } catch (err) {
       console.error("[PaymentForm] Pengiriman formulir gagal:", err);
 
@@ -298,12 +304,7 @@ export default function PaymentForm() {
             Tanggal pembayaran <b>*</b>
           </span>
 
-          <input
-            name="paymentDate"
-            type="date"
-            required
-            max={new Date().toISOString().slice(0, 10)}
-          />
+          <input name="paymentDate" type="date" required />
         </label>
 
         <label className="field">
@@ -340,15 +341,6 @@ export default function PaymentForm() {
             <option value="Lainnya">Lainnya</option>
           </select>
         </label>
-
-        <label className="field field-full">
-          <span>Nama pengirim / berita transfer</span>
-          <input
-            name="transferNote"
-            maxLength={200}
-            placeholder="Nama pada rekening atau catatan transfer (opsional)"
-          />
-        </label>
       </div>
 
       <div className="form-section-title section-spaced">
@@ -362,7 +354,7 @@ export default function PaymentForm() {
           type="file"
           accept=".jpg,.jpeg,.png,.webp,.pdf"
           required
-          onChange={handleFileChange}
+          onChange={handleProofChange}
         />
 
         <span className="upload-icon">{proofFile ? "✓" : "↑"}</span>
@@ -377,6 +369,40 @@ export default function PaymentForm() {
           <>
             <strong>Pilih bukti transfer untuk diunggah</strong>
             <small>Format JPG, PNG, WEBP, atau PDF · Maksimal 5 MB</small>
+            <span className="upload-link">Pilih file dari perangkat</span>
+          </>
+        )}
+      </label>
+
+      <div className="form-section-title section-spaced">
+        <span>04</span>
+        <strong>Paspor peserta</strong>
+      </div>
+
+      <label className={`upload-box${passportFile ? " has-file" : ""}`}>
+        <input
+          name="passport"
+          type="file"
+          accept=".jpg,.jpeg,.png,.webp,.pdf"
+          required
+          onChange={handlePassportChange}
+        />
+
+        <span className="upload-icon">{passportFile ? "✓" : "↑"}</span>
+
+        {passportFile ? (
+          <>
+            <strong className="upload-file-name">{passportFile.name}</strong>
+            <small>{formatFileSize(passportFile.size)} · siap diunggah</small>
+            <span className="upload-link">Ganti file</span>
+          </>
+        ) : (
+          <>
+            <strong>Pilih foto atau PDF paspor peserta</strong>
+            <small>
+              Halaman data diri yang berfoto · JPG, PNG, WEBP, atau PDF ·
+              Maksimal 5 MB
+            </small>
             <span className="upload-link">Pilih file dari perangkat</span>
           </>
         )}

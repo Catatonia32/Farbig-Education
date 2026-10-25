@@ -1,0 +1,22 @@
+pnpm user:create --email administrator@herlancorp.com --name "Administrator" --role super_admin
+
+pnpm user:create --email xxx --reset
+
+Email: administrator@herlancorp.com
+Password: admin123!@#
+
+-- Lihat daftar user (tanpa hash password)
+select id, email, full_name, role, is_active, last_login_at, locked_until
+from public.app_users order by created_at;
+
+-- Nonaktifkan user (langsung tidak bisa masuk)
+update public.app_users set is_active = false where email = 'user@contoh.com';
+
+-- Ubah level user
+update public.app_users set role = 'viewer' where email = 'user@contoh.com';
+
+-- Paksa semua sesi user keluar
+update public.app_users set session_version = session_version + 1 where email = 'user@contoh.com';
+
+-- Buka kunci akun yang terkunci
+update public.app_users set failed_login_attempts = 0, locked_until = null where email = 'user@contoh.com';

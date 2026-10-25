@@ -83,7 +83,6 @@ export async function GET() {
     { header: "Tanggal Pembayaran", key: "paydate", width: 18 },
     { header: "Nominal", key: "amount", width: 18 },
     { header: "Metode Pembayaran", key: "method", width: 20 },
-    { header: "Nama Pengirim / Berita", key: "note", width: 28 },
     { header: "Catatan", key: "notes", width: 36 },
     { header: "Status", key: "status", width: 16 },
     { header: "File Bukti", key: "proof", width: 42 },
@@ -103,7 +102,6 @@ export async function GET() {
       paydate: toDateOnly(r.payment_date),
       amount: Number(r.amount_paid) || 0,
       method: str(r.payment_method),
-      note: str(r.transfer_note),
       notes: str(r.notes),
       status: STATUS_LABEL[str(r.status)] ?? str(r.status),
       proof: str(r.proof_file),
@@ -167,7 +165,10 @@ export async function GET() {
     const amountLetter = sheet.getColumn("amount").letter;
     const totalRow = sheet.getRow(totalRowIndex);
 
-    totalRow.getCell(sheet.getColumn("method").number).value = "TOTAL";
+    // Label diletakkan di kolom tepat di kiri nominal.
+    const labelColIndex = amountColIndex - 1;
+
+    totalRow.getCell(labelColIndex).value = "TOTAL";
     totalRow.getCell(amountColIndex).value = {
       formula: `SUBTOTAL(109,${amountLetter}2:${amountLetter}${rows.length + 1})`,
     };
@@ -182,9 +183,7 @@ export async function GET() {
       };
       cell.border = { top: { style: "medium", color: { argb: BRAND } } };
     });
-    totalRow.getCell(sheet.getColumn("method").number).alignment = {
-      horizontal: "right",
-    };
+    totalRow.getCell(labelColIndex).alignment = { horizontal: "right" };
     totalRow.getCell(amountColIndex).numFmt = '"Rp" #,##0';
     totalRow.getCell(amountColIndex).alignment = { horizontal: "right" };
   }

@@ -1,13 +1,16 @@
-import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
-import { isAdminRequest } from "@/lib/auth";
+import { NextResponse } from "next/server";
+import { requireAdmin } from "@/lib/auth/require-admin";
+import { supabaseAdmin } from "@/lib/supabase/admin";
+import {
+  downloadStoredFile,
+  PASSPORT_FOLDER,
+  PROOF_FOLDER,
+} from "@/lib/supabase/storage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const BUCKET_NAME = "payment-proofs";
-
-const types: Record<string, string> = {
+const CONTENT_TYPES: Record<string, string> = {
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
   ".png": "image/png",
@@ -15,84 +18,55 @@ const types: Record<string, string> = {
   ".pdf": "application/pdf",
 };
 
-type RouteContext = {
-  params: Promise<{ filename: string }>;
-};
+export async function GET(request: Request) {
+  const auth = await requireAdmin();
+  if (!auth.authorized) return auth.response;
 
-function createSupabaseAdmin() {
-  const supabaseUrl =
-    process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+  // Nama file diambil dari segmen terakhir URL.
+  const lastSegment =
+    new URL(request.url).pathname.split("/").filter(Boolean).pop() ?? "";
 
-  const supabaseKey =
-    process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+  let filename = "";
 
-  if (!supabaseUrl || !supabaseKey) {
-    throw new Error(
-      "SUPABASE_URL atau SUPABASE_SECRET_KEY belum dikonfigurasi.",
+  try {
+    filename = decodeURIComponent(lastSegment);
+  } catch {
+    filename = "";
+  }
+
+  const dot = filename.lastIndexOf(".");
+  const ext = dot >= 0 ? filename.slice(dot).toLowerCase() : "";
+  const contentType = CONTENT_TYPES[ext];
+
+  if (!filename || !contentType) {
+    return NextResponse.json(
+      { error: "Nama file tidak valid." },
+      { status: 400 },
     );
   }
 
-  return createClient(supabaseUrl, supabaseKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
+  // Cari di folder bukti, folder paspor, lalu root (untuk data lama).
+  const file = await downloadStoredFile(supabaseAdmin, filename, [
+    PROOF_FOLDER,
+    PASSPORT_FOLDER,
+    "",
+  ]);
+
+  if (!file) {
+    return NextResponse.json(
+      { error: "File tidak ditemukan." },
+      { status: 404 },
+    );
+  }
+
+  const bytes = await file.blob.arrayBuffer();
+
+  return new NextResponse(bytes, {
+    headers: {
+      "Content-Type": contentType,
+      "Content-Disposition": `inline; filename="${filename}"`,
+      "Cache-Control": "private, no-store",
+      "X-Content-Type-Options": "nosniff",
     },
   });
-}
-
-export async function GET(_request: NextRequest, context: RouteContext) {
-  try {
-    // Periksa autentikasi admin.
-    if (!(await isAdminRequest())) {
-      return NextResponse.json({ error: "Akses ditolak." }, { status: 401 });
-    }
-
-    const { filename } = await context.params;
-
-    // Validasi nama file agar tidak dapat mengakses path sembarangan.
-    if (!/^[0-9a-f-]{36}\.(jpg|jpeg|png|webp|pdf)$/i.test(filename)) {
-      return NextResponse.json({ error: "File tidak valid." }, { status: 400 });
-    }
-
-    const ext = filename.slice(filename.lastIndexOf(".")).toLowerCase();
-
-    const supabase = createSupabaseAdmin();
-
-    // Ambil file dari Supabase Storage, bukan dari folder lokal.
-    const { data, error } = await supabase.storage
-      .from(BUCKET_NAME)
-      .download(filename);
-
-    if (error || !data) {
-      console.error("Gagal mengambil file dari Supabase Storage:", {
-        filename,
-        message: error?.message,
-      });
-
-      return NextResponse.json(
-        { error: "File tidak ditemukan di Supabase Storage." },
-        { status: 404 },
-      );
-    }
-
-    const fileBuffer = await data.arrayBuffer();
-
-    return new NextResponse(fileBuffer, {
-      status: 200,
-      headers: {
-        "Content-Type": types[ext],
-        "Content-Length": String(data.size),
-        "Content-Disposition": `inline; filename="${filename}"`,
-        "X-Content-Type-Options": "nosniff",
-        "Cache-Control": "private, no-store",
-      },
-    });
-  } catch (error) {
-    console.error("Kesalahan saat membuka bukti pembayaran:", error);
-
-    return NextResponse.json(
-      { error: "Terjadi kesalahan saat mengambil file." },
-      { status: 500 },
-    );
-  }
 }
