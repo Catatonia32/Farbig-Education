@@ -445,7 +445,7 @@ export default function AdminDashboard() {
           <span>Total nominal dilaporkan</span>
           <strong className="stat-money">{money(total)}</strong>
           <small>Akumulasi semua respons</small>
-          <span className="stat-mark">Rp</span>
+          <span className="stat-mark">$</span>
         </div>
       </section>
 

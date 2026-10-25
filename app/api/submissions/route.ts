@@ -16,10 +16,12 @@ const MIME_EXT: Record<string, string> = {
 };
 
 const allowedPrograms = new Set([
-  "Singapore–Malaysia 6 Hari",
-  "Japan Mono Tokyo 8 Hari",
-  "China Beijing 7 Hari",
-  "Mesir–Israel 14 Hari",
+  "Singapore–Sentosa Island Selama 6 Hari",
+  "Malaysia-Bukit Bintang Selama 6 Hari",
+  "Japan-Universal Studios Japan (USJ) & Tokyo Disney Resort Selama 8 Hari",
+  "China-The Great Wall of China Selama 7 Hari",
+  "Korea Selatan-Busan Selama 14 Hari",
+  "Australia-Kangaroo Island Selama 7 Hari",
   "Program lainnya",
 ]);
 
@@ -29,12 +31,7 @@ const allowedPaymentTypes = [
   "Pembayaran tambahan",
 ];
 
-const allowedPaymentMethods = [
-  "Transfer bank",
-  "Virtual account",
-  "Tunai",
-  "Lainnya",
-];
+const allowedPaymentMethods = ["Transfer bank", "Lainnya"];
 
 const clean = (value: FormDataEntryValue | null) =>
   typeof value === "string" ? value.trim() : "";

@@ -4,10 +4,12 @@ import { useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 
 const programs = [
-  "Singapore–Malaysia 6 Hari",
-  "Japan Mono Tokyo 8 Hari",
-  "China Beijing 7 Hari",
-  "Mesir–Israel 14 Hari",
+  "Singapore–Sentosa Island Selama 6 Hari",
+  "Malaysia-Bukit Bintang Selama 6 Hari",
+  "Japan-Universal Studios Japan (USJ) & Tokyo Disney Resort Selama 8 Hari",
+  "China-The Great Wall of China Selama 7 Hari",
+  "Korea Selatan-Busan Selama 14 Hari",
+  "Australia-Kangaroo Island Selama 7 Hari",
   "Program lainnya",
 ];
 
@@ -262,7 +264,7 @@ export default function PaymentForm() {
           />
         </label>
 
-        <label className="field field-full">
+        <label className="field">
           <span>
             Program Study Overseas <b>*</b>
           </span>
@@ -336,8 +338,6 @@ export default function PaymentForm() {
               Pilih metode pembayaran
             </option>
             <option value="Transfer bank">Transfer bank</option>
-            <option value="Virtual account">Virtual account</option>
-            <option value="Tunai">Tunai</option>
             <option value="Lainnya">Lainnya</option>
           </select>
         </label>
@@ -439,10 +439,25 @@ export default function PaymentForm() {
         className="button button-primary submit-button"
         type="submit"
         disabled={busy}
+        style={{
+          position: "relative",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          textAlign: "center",
+        }}
       >
         {busy ? "Mengirim data..." : "Kirim konfirmasi pembayaran"}
 
-        <span aria-hidden="true">↗</span>
+        <span
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            right: "16px",
+          }}
+        >
+          ↗
+        </span>
       </button>
 
       <p className="form-footnote">

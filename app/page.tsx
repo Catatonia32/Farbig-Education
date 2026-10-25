@@ -90,7 +90,9 @@ export default function HomePage() {
             </div>
             <div className="tip">
               <span>03</span>
-              <p>Unggah bukti transfer yang dapat dibaca dengan jelas.</p>
+              <p>
+                Unggah bukti transfer dan paspor yang dapat dibaca dengan jelas.
+              </p>
             </div>
           </div>
           <div className="privacy-note">
@@ -112,6 +114,35 @@ export default function HomePage() {
         <span>© {new Date().getFullYear()} Farbig International Education</span>
         <span>LEARN · CONNECT · GROW</span>
       </footer>
+
+      <a
+        href="https://wa.me/6285784259890?text=Halo%20tim%20Farbig%2C%20saya%20ingin%20bertanya%20mengenai%20beberapa%20informasi%20seputar%20program%20Study%20Overseas.%20Bisa%20dibantu%3F"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="Hubungi bantuan Farbig melalui WhatsApp"
+        style={{
+          position: "fixed",
+          right: "24px",
+          bottom: "24px",
+          zIndex: 1000,
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: "8px",
+          padding: "14px 20px",
+          borderRadius: "999px",
+          backgroundColor: "#25D366",
+          color: "#ffffff",
+          textDecoration: "none",
+          fontWeight: 600,
+          fontSize: "14px",
+          boxShadow: "0 4px 16px rgba(0, 0, 0, 0.2)",
+          cursor: "pointer",
+        }}
+      >
+        <span aria-hidden="true">☏</span>
+        Bantuan WhatsApp
+      </a>
     </main>
   );
 }
