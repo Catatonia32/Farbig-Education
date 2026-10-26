@@ -285,6 +285,8 @@
   right: 0;
   top: 0;
   transform: rotate(4deg);
+  background-image:
+    url(/images/MY.jpg), linear-gradient(135deg, #be123c, #d8b45a);
   animation: lp-float2 7s ease-in-out infinite;
 }
 .lp-photo-sm {
@@ -294,7 +296,7 @@
   top: 40px;
   transform: rotate(-6deg);
   background-image:
-    url(/images/JP.jpg), linear-gradient(135deg, #be123c, #d8b45a);
+    url(/images/SG.jpg), linear-gradient(135deg, #be123c, #d8b45a);
   animation: lp-float2 8s ease-in-out infinite reverse;
 }
 .lp-pass {
