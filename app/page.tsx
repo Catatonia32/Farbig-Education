@@ -5,9 +5,9 @@ import PaymentForm from "@/components/PaymentForm";
 import "./landing.css";
 
 export const metadata: Metadata = {
-  title: "Konfirmasi Pelunasan Study Overseas | Farbig",
+  title: "Farbig International Education",
   description:
-    "Konfirmasi pembayaran program Study Overseas Farbig International Education: isi formulir, unggah bukti, dan terima email verifikasi.",
+    "Farbig International Education - Program Study Overseas untuk pelajar yang ingin belajar, terhubung, dan bertumbuh.",
 };
 
 const WA_NUMBER = "6285784259890";
@@ -23,7 +23,7 @@ const programs = [
     code: "SG",
     flag: "🇸🇬",
     country: "Singapore",
-    place: "Sentosa Island",
+    place: "Universal Studio Singapore",
     days: "6 Hari",
     c1: "#0f766e",
     c2: "#134e4a",
@@ -32,7 +32,7 @@ const programs = [
     code: "MY",
     flag: "🇲🇾",
     country: "Malaysia",
-    place: "Bukit Bintang",
+    place: "Twin Tower Kuala Lumpur",
     days: "6 Hari",
     c1: "#1d4ed8",
     c2: "#1e3a8a",
@@ -41,7 +41,7 @@ const programs = [
     code: "JP",
     flag: "🇯🇵",
     country: "Japan",
-    place: "Universal Studios Japan & Tokyo Disney Resort",
+    place: "Toyota Automobile Museum",
     days: "8 Hari",
     c1: "#be123c",
     c2: "#7f1d1d",
@@ -59,7 +59,7 @@ const programs = [
     code: "KR",
     flag: "🇰🇷",
     country: "Korea Selatan",
-    place: "Busan",
+    place: "Nami Island",
     days: "14 Hari",
     c1: "#6d28d9",
     c2: "#4c1d95",
@@ -68,7 +68,7 @@ const programs = [
     code: "AU",
     flag: "🇦🇺",
     country: "Australia",
-    place: "Kangaroo Island",
+    place: "Sydney Opera House",
     days: "7 Hari",
     c1: "#15803d",
     c2: "#14532d",
